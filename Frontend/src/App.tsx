@@ -30,19 +30,20 @@ function App() {
   const [isMicActive, setIsMicActive] = useState(false);
   const [mediaRecorder, setMediaRecorder] = useState<MediaRecorder | null>(null);
 
-  // Canvas State - Updated with history
+  // Canvas State - Updated with history & monochrome default
   const [drawTool, setDrawTool] = useState<DrawTool>('pen');
-  const [drawColor, setDrawColor] = useState('#2563eb');
+  const [drawColor, setDrawColor] = useState('#000000'); // Changed default from blue to black
   const [strokeWidth, setStrokeWidth] = useState(2);
   const [isDrawing, setIsDrawing] = useState(false);
   const [startPos, setStartPos] = useState({ x: 0, y: 0 });
   const [canvasHistory, setCanvasHistory] = useState<string[]>([]);
   const [historyStep, setHistoryStep] = useState(-1);
-  
-  // Code Editor State - Empty on first load, then persist
+  const snapshotRef = useRef<ImageData | null>(null);
+
+  // Code Editor State
   const [codeContent, setCodeContent] = useState(() => {
     const saved = localStorage.getItem('prepped-code');
-    return saved !== null ? saved : ''; // Empty string on first load
+    return saved !== null ? saved : ''; 
   });
   const [codeOutput, setCodeOutput] = useState('');
   const [isExecuting, setIsExecuting] = useState(false);
@@ -50,7 +51,21 @@ function App() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
-
+  useEffect(() => {
+    if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+      navigator.mediaDevices.getUserMedia({ 
+        video: { 
+          width: { ideal: 1280 },  // Request Widescreen
+          height: { ideal: 720 },
+          aspectRatio: { ideal: 1.777 } // 16:9 Aspect Ratio
+        } 
+      })
+      .then(stream => {
+        if (videoRef.current) videoRef.current.srcObject = stream;
+      })
+      .catch(err => console.error("Webcam access denied:", err));
+    }
+  }, []);
   // Apply Theme
   useEffect(() => {
     const root = document.documentElement;
@@ -62,7 +77,17 @@ function App() {
     }
   }, [theme]);
 
-  // Canvas Setup - Updated with history
+  // Adjust draw color when theme changes if it's still default
+  useEffect(() => {
+     const currentTheme = document.documentElement.getAttribute('data-theme');
+     if (currentTheme === 'dark' && drawColor === '#000000') {
+         setDrawColor('#ffffff');
+     } else if (currentTheme === 'light' && drawColor === '#ffffff') {
+         setDrawColor('#000000');
+     }
+  }, [theme]);
+
+  // Canvas Setup
   useEffect(() => {
     if (canvasRef.current && activeTab === 'notes') {
       const canvas = canvasRef.current;
@@ -76,7 +101,6 @@ function App() {
           ctx.lineCap = 'round';
           ctx.lineJoin = 'round';
           
-          // Save initial blank state
           if (canvasHistory.length === 0) {
             saveCanvasState();
           }
@@ -85,7 +109,7 @@ function App() {
     }
   }, [activeTab]);
 
-  // Resize canvas on window resize
+  // Resize canvas
   useEffect(() => {
     const handleResize = () => {
       if (canvasRef.current && activeTab === 'notes') {
@@ -110,17 +134,14 @@ function App() {
     return () => window.removeEventListener('resize', handleResize);
   }, [activeTab]);
 
-  // Save code to localStorage on change
   useEffect(() => {
     localStorage.setItem('prepped-code', codeContent);
   }, [codeContent]);
 
-  // Auto-scroll chat
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, activeTab]);
 
-  // Webcam Setup
   useEffect(() => {
     if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
       navigator.mediaDevices.getUserMedia({ video: true })
@@ -144,13 +165,8 @@ function App() {
 
       recorder.onstop = async () => {
         const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
-        // TODO: Send to backend for speech-to-text
-        // For now, just log
         console.log('Audio recorded:', audioBlob);
         setAiState('listening');
-        
-        // Simulate sending to backend
-        // You'll need to implement /voice-to-text endpoint
         setTimeout(() => setAiState('idle'), 1000);
       };
 
@@ -179,7 +195,7 @@ function App() {
     }
   };
 
-  // Canvas History Management
+  // Canvas History
   const saveCanvasState = () => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -209,7 +225,7 @@ function App() {
     }
   };
 
-  // Canvas Drawing Handlers - Updated
+  // Canvas Drawing with Preview
   const startDrawing = (e: React.MouseEvent<HTMLCanvasElement>) => {
     setIsDrawing(true);
     const canvas = canvasRef.current;
@@ -222,13 +238,17 @@ function App() {
     
     setStartPos({ x, y });
 
+    if (drawTool === 'rectangle' || drawTool === 'circle') {
+      snapshotRef.current = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    }
+
     ctx.strokeStyle = drawColor;
     ctx.fillStyle = drawColor;
     ctx.lineWidth = drawTool === 'eraser' ? strokeWidth * 3 : strokeWidth;
     ctx.globalCompositeOperation = drawTool === 'eraser' ? 'destination-out' : 'source-over';
     
+    ctx.beginPath();
     if (drawTool === 'pen' || drawTool === 'eraser') {
-      ctx.beginPath();
       ctx.moveTo(x, y);
     }
   };
@@ -246,6 +266,21 @@ function App() {
     if (drawTool === 'pen' || drawTool === 'eraser') {
       ctx.lineTo(x, y);
       ctx.stroke();
+    } else if (drawTool === 'rectangle' || drawTool === 'circle') {
+      if (snapshotRef.current) {
+        ctx.putImageData(snapshotRef.current, 0, 0);
+      }
+      
+      ctx.beginPath();
+      if (drawTool === 'rectangle') {
+        const width = x - startPos.x;
+        const height = y - startPos.y;
+        ctx.rect(startPos.x, startPos.y, width, height);
+      } else if (drawTool === 'circle') {
+        const radius = Math.sqrt(Math.pow(x - startPos.x, 2) + Math.pow(y - startPos.y, 2));
+        ctx.arc(startPos.x, startPos.y, radius, 0, 2 * Math.PI);
+      }
+      ctx.stroke();
     }
   };
 
@@ -259,15 +294,22 @@ function App() {
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
 
-    if (drawTool === 'rectangle') {
-      const width = x - startPos.x;
-      const height = y - startPos.y;
-      ctx.strokeRect(startPos.x, startPos.y, width, height);
-    } else if (drawTool === 'circle') {
-      const radius = Math.sqrt(Math.pow(x - startPos.x, 2) + Math.pow(y - startPos.y, 2));
+    if (drawTool === 'rectangle' || drawTool === 'circle') {
+      if (snapshotRef.current) {
+        ctx.putImageData(snapshotRef.current, 0, 0);
+      }
+
       ctx.beginPath();
-      ctx.arc(startPos.x, startPos.y, radius, 0, 2 * Math.PI);
+      if (drawTool === 'rectangle') {
+        const width = x - startPos.x;
+        const height = y - startPos.y;
+        ctx.rect(startPos.x, startPos.y, width, height);
+      } else if (drawTool === 'circle') {
+        const radius = Math.sqrt(Math.pow(x - startPos.x, 2) + Math.pow(y - startPos.y, 2));
+        ctx.arc(startPos.x, startPos.y, radius, 0, 2 * Math.PI);
+      }
       ctx.stroke();
+      snapshotRef.current = null;
     } else if (drawTool === 'text') {
       const text = prompt('Enter text:');
       if (text) {
@@ -277,10 +319,9 @@ function App() {
     }
 
     setIsDrawing(false);
-    saveCanvasState(); // Save after each drawing action
+    saveCanvasState();
   };
 
-  // --- Handlers ---
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files) setFile(e.target.files[0]);
   };
@@ -311,20 +352,17 @@ function App() {
     setInput('');
     setIsLoading(true);
     
-    // Update UI
+    setMessages(prev => [...prev, { role: 'user', content: userMsg }]);
     const newHistory = [...messages, { role: 'user', content: userMsg } as Message];
-    setMessages(newHistory);
 
     try {
-      // Backend Call
       const historyForBackend = newHistory.slice(0, -1).filter((m, i) => !(i === 0 && m.role === 'model'));
       const payload = { message: userMsg, history: historyForBackend };
       const response = await axios.post('http://localhost:8000/chat', payload);
       
       const { response: aiText, audio } = response.data;
-      setMessages([...newHistory, { role: 'model', content: aiText }]);
+      setMessages(prev => [...prev, { role: 'model', content: aiText }]);
 
-      // Play Audio if available
       if (audio) {
         setAiState('speaking');
         const snd = new Audio("data:audio/mp3;base64," + audio);
@@ -339,17 +377,6 @@ function App() {
     }
   };
 
-  // Voice Hook Callbacks
-  const handleUserVoiceMessage = (text: string) => {
-    setMessages(prev => [...prev, { role: 'user', content: text }]);
-    setAiState('listening'); // User finished speaking, now processing
-  };
-  
-  const handleAiVoiceResponse = (text: string) => {
-    setMessages(prev => [...prev, { role: 'model', content: text }]);
-  };
-
-  // Code Execution Handler - Real backend execution with better error handling
   const executeCode = async () => {
     if (!codeContent.trim()) {
       setCodeOutput('⚠️ Please write some code first!');
@@ -361,73 +388,24 @@ function App() {
     setCodeOutput('⏳ Running code...\n');
     
     try {
-      // Detect language
-      const isPython = codeContent.includes('def ') || 
-                       codeContent.includes('print(') || 
-                       codeContent.includes('import ') ||
-                       codeContent.includes('class ') ||
-                       codeContent.trim().startsWith('#') ||
-                       (!codeContent.includes('console.log') && !codeContent.includes('function'));
-      
+      const isPython = codeContent.includes('def ') || (!codeContent.includes('console.log') && !codeContent.includes('function'));
       const language = isPython ? 'python' : 'javascript';
       
-      console.log('='.repeat(50));
-      console.log('Executing code...');
-      console.log('Language:', language);
-      console.log('Code:', codeContent.substring(0, 100) + '...');
-      console.log('='.repeat(50));
-      
-      const payload = {
-        code: codeContent,
-        language: language
-      };
-      
-      console.log('Sending request to:', 'http://localhost:8000/execute-code');
-      console.log('Payload:', JSON.stringify(payload, null, 2));
-      
-      // Call backend
+      const payload = { code: codeContent, language: language };
       const response = await axios.post('http://localhost:8000/execute-code', payload, {
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'application/json'
-        },
+        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
         timeout: 10000,
-        validateStatus: (status) => status < 500 // Don't throw on 4xx errors
+        validateStatus: (status) => status < 500
       });
       
-      console.log('Response status:', response.status);
-      console.log('Response data:', response.data);
-      
-      if (response.status === 404) {
-        setCodeOutput(`❌ Endpoint Not Found (404)!\n\nThe backend server is running but /execute-code endpoint is missing.\n\nPlease:\n1. Stop the backend (Ctrl+C)\n2. Make sure you have the latest main.py\n3. Restart: python main.py\n4. Visit http://localhost:8000/docs to verify endpoint exists`);
-        return;
-      }
-      
       const { success, output, error } = response.data;
-      
       if (success) {
         setCodeOutput(`✅ Execution successful!\n\nOutput:\n${output}${error ? `\n\n⚠️ Warnings:\n${error}` : ''}`);
       } else {
         setCodeOutput(`❌ Execution failed!\n\n${error || 'Unknown error'}${output ? `\n\nPartial Output:\n${output}` : ''}`);
       }
-      
     } catch (error: any) {
-      console.error('Code execution error:', error);
-      console.error('Error details:', {
-        message: error.message,
-        code: error.code,
-        response: error.response?.data
-      });
-      
-      if (error.code === 'ECONNREFUSED' || error.message.includes('Network Error')) {
-        setCodeOutput(`❌ Cannot Connect to Backend!\n\n🔴 Backend server is not running.\n\nSteps to fix:\n1. Open terminal in Backend folder\n2. Run: python main.py\n3. Wait for "Server running at: http://localhost:8000"\n4. Try running code again`);
-      } else if (error.code === 'ECONNABORTED' || error.message.includes('timeout')) {
-        setCodeOutput(`❌ Request Timeout!\n\nCode execution took too long (>10 seconds).\nCheck for infinite loops or heavy computations.`);
-      } else if (error.response?.status === 404) {
-        setCodeOutput(`❌ Endpoint Not Found (404)!\n\nDEBUG INFO:\nURL: ${error.config?.url}\nMethod: ${error.config?.method}\n\nThe /execute-code endpoint doesn't exist.\n\n✅ Verify at: http://localhost:8000/docs\n✅ Or test: http://localhost:8000/health`);
-      } else {
-        setCodeOutput(`❌ Error: ${error.response?.data?.detail || error.message || 'Unknown error'}\n\nStatus: ${error.response?.status || 'No response'}\n\nCheck browser console (F12) for details.`);
-      }
+      setCodeOutput(`❌ Error: ${error.message || 'Unknown error'}`);
     } finally {
       setIsExecuting(false);
     }
@@ -457,7 +435,7 @@ function App() {
       {/* 1. TOP NAVIGATION */}
       <nav className="top-nav">
         <div className="brand">
-          <Cpu size={24} color="#2563eb" />
+          <Cpu size={24} /> {/* Removed hardcoded color */}
           Prepped.ai
         </div>
         
@@ -495,8 +473,6 @@ function App() {
 
       {/* 2. MAIN WORKSPACE */}
       <main className="workspace">
-        
-        {/* LEFT PANEL: TABS & CONTENT */}
         <div className="main-panel">
           <div className="tabs-header">
             <div className={`tab ${activeTab === 'chat' ? 'active' : ''}`} onClick={() => setActiveTab('chat')}>
@@ -517,7 +493,7 @@ function App() {
                 <div style={{maxWidth: '400px', margin: '20px auto', display: 'flex', flexDirection: 'column', gap: '15px'}}>
                    <input type="file" accept=".pdf" onChange={handleFileChange} />
                    <textarea rows={4} placeholder="Paste JD..." value={jd} onChange={e => setJd(e.target.value)} style={{padding: '10px'}}/>
-                   <button onClick={handleStartInterview} style={{padding: '10px', background: '#2563eb', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer'}}>
+                   <button onClick={handleStartInterview} style={{padding: '10px', background: 'var(--accent-color)', color: 'var(--accent-text)', border: 'none', borderRadius: '6px', cursor: 'pointer'}}>
                      {isLoading ? "Loading..." : "Start Session"}
                    </button>
                 </div>
@@ -535,15 +511,18 @@ function App() {
                       ))}
                       <div ref={messagesEndRef} />
                     </div>
+
                     <div className="chat-input-area">
-                      <input 
-                        value={input} 
-                        onChange={e => setInput(e.target.value)} 
-                        onKeyDown={e => e.key === 'Enter' && handleSendMessage()}
-                        placeholder="Type a message..." 
-                      />
-                      <button onClick={handleSendMessage}><Send size={18}/></button>
-                    </div>
+  <div className="chat-input-wrapper">
+    <input 
+      value={input} 
+      onChange={e => setInput(e.target.value)} 
+      onKeyDown={e => e.key === 'Enter' && handleSendMessage()}
+      placeholder="Type a message..." 
+    />
+    <button onClick={handleSendMessage}><Send size={18}/></button>
+  </div>
+</div>
                   </div>
                 )}
 
@@ -575,7 +554,7 @@ function App() {
                       className={`code-editor ${codeTheme}`}
                       value={codeContent}
                       onChange={e => setCodeContent(e.target.value)}
-                      placeholder="# Start coding here...\n\n# Python example:\nprint('Hello, World!')\n\n# JavaScript example:\nconsole.log('Hello, World!');"
+                      placeholder="# Start coding here..."
                       spellCheck={false}
                     />
                     
@@ -627,12 +606,7 @@ function App() {
                       />
                       
                       <div className="tool-group" style={{marginLeft: 'auto'}}>
-                        <button 
-                          className="tool-btn" 
-                          onClick={undoCanvas} 
-                          disabled={historyStep <= 0}
-                          title="Undo"
-                        >
+                        <button className="tool-btn" onClick={undoCanvas} disabled={historyStep <= 0} title="Undo">
                           <Undo size={16} />
                         </button>
                         <button className="tool-btn" onClick={downloadCanvas} title="Save as PNG">
@@ -666,10 +640,7 @@ function App() {
           </div>
         </div>
 
-        {/* RIGHT PANEL: AI & VIDEO */}
         <aside className="side-panel">
-          
-          {/* AI INTERVIEWER WINDOW */}
           <div className="ai-feed">
             <div className="visualizer">
               <div className="bar" style={{animationPlayState: aiState === 'speaking' ? 'running' : 'paused'}}></div>
@@ -678,16 +649,13 @@ function App() {
               <div className="bar" style={{animationPlayState: aiState === 'speaking' ? 'running' : 'paused'}}></div>
               <div className="bar" style={{animationPlayState: aiState === 'speaking' ? 'running' : 'paused'}}></div>
             </div>
-            <p style={{marginTop: '15px', color: '#64748b', fontSize: '0.9rem'}}>
+            <p style={{marginTop: '15px', color: 'var(--text-secondary)', fontSize: '0.9rem'}}>
               {aiState === 'speaking' ? "AI Speaking..." : aiState === 'listening' ? "Processing..." : "Ready"}
             </p>
           </div>
 
-          {/* CANDIDATE CAMERA */}
           <div className="user-feed">
             <video ref={videoRef} autoPlay muted playsInline />
-            
-            {/* Mic Toggle Button */}
             {isContextLoaded && (
               <button 
                 className={`mic-toggle ${isMicActive ? 'active' : 'muted'}`}
@@ -699,16 +667,13 @@ function App() {
             )}
           </div>
 
-          {/* FOOTER ACTION */}
           <button className="end-session-btn" onClick={() => window.location.reload()}>
              <Power size={18} /> End Session
           </button>
-
         </aside>
       </main>
     </div>
   );
 }
-
 
 export default App;
