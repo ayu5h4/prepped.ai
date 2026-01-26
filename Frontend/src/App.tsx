@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import axios from 'axios';
 import './App.css';
+import VoiceChat from './components/VoiceChat';
 
 interface Message {
   role: 'user' | 'model';
@@ -14,7 +15,7 @@ function App() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
-  const [feedback, setFeedback] = useState(''); // New State for Feedback
+  const [feedback, setFeedback] = useState('');
   
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -57,6 +58,7 @@ function App() {
     }
   };
 
+  // --- TEXT CHAT HANDLER ---
   const handleSendMessage = async () => {
     if (!input.trim()) return;
 
@@ -68,14 +70,18 @@ function App() {
     setMessages(newHistory);
 
     try {
-      // Filter out fake greeting
+      // Filter out fake greeting for backend
       const historyForBackend = newHistory.slice(0, -1).filter((msg, index) => {
         if (index === 0 && msg.role === 'model') return false;
         return true;
       });
 
       const payload = { message: userMsg, history: historyForBackend };
+      
+      // Note: Text endpoint returns { response: "text", audio: "base64" }
+      // We ignore audio here for text-only mode, or you can play it if you want.
       const response = await axios.post('http://localhost:8000/chat', payload);
+      
       const aiMsg = response.data.response;
       setMessages([...newHistory, { role: 'model', content: aiMsg }]);
     } catch (error) {
@@ -86,13 +92,22 @@ function App() {
     }
   };
 
-  // --- NEW FEATURE: End Interview ---
+  // --- CALLBACKS FOR VOICE CHAT ---
+  // 1. When user speaks, add their text to UI immediately
+  const handleUserVoiceMessage = (text: string) => {
+    setMessages(prev => [...prev, { role: 'user', content: text }]);
+  };
+
+  // 2. When AI responds (audio + text), add AI text to UI
+  const handleAiVoiceResponse = (text: string) => {
+    setMessages(prev => [...prev, { role: 'model', content: text }]);
+  };
+
   const handleEndInterview = async () => {
     if (!window.confirm("Are you sure you want to end the interview and get feedback?")) return;
     
     setIsLoading(true);
     try {
-        // Filter history same as chat
         const historyForBackend = messages.filter((msg, index) => {
             if (index === 0 && msg.role === 'model') return false;
             return true;
@@ -118,9 +133,8 @@ function App() {
   return (
     <div className="app-container">
       <header>
-        {/* REBRAND CHANGE */}
         <h1>Prepped.ai 🚀</h1>
-        <p>Your AI Technical Interview Coach</p>
+        <p>Voice-Enabled AI Interview Coach</p>
       </header>
 
       {/* VIEW 1: SETUP */}
@@ -146,7 +160,7 @@ function App() {
         </div>
       )}
 
-      {/* VIEW 2: CHAT */}
+      {/* VIEW 2: CHAT INTERFACE */}
       {isContextLoaded && !feedback && (
         <div className="chat-interface">
           <div className="chat-window">
@@ -159,24 +173,30 @@ function App() {
             <div ref={messagesEndRef} />
           </div>
           
+          {/* VOICE CHAT COMPONENT */}
+          <VoiceChat 
+            messages={messages} 
+            onSendMessage={handleUserVoiceMessage} 
+            onAiResponse={handleAiVoiceResponse}
+          />
+
           <div className="input-area">
             <textarea 
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={handleKeyPress}
-              placeholder="Type your answer..."
+              placeholder="Type your answer or use Voice..."
             />
-            <button onClick={handleSendMessage} disabled={isLoading}>Send</button>
+            <button onClick={handleSendMessage} disabled={isLoading}>Send Text</button>
           </div>
           
-          {/* NEW FEATURE BUTTON */}
           <button className="end-btn" onClick={handleEndInterview} disabled={isLoading} style={{marginTop: '10px', background: '#dc3545'}}>
              End Interview & Get Feedback
           </button>
         </div>
       )}
 
-      {/* VIEW 3: FEEDBACK REPORT */}
+      {/* VIEW 3: FEEDBACK */}
       {feedback && (
         <div className="feedback-card">
             <h2>Interview Feedback</h2>
