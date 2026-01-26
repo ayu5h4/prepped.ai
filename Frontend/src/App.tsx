@@ -14,6 +14,7 @@ function App() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [feedback, setFeedback] = useState(''); // New State for Feedback
   
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -47,11 +48,10 @@ function App() {
         headers: { 'Content-Type': 'multipart/form-data' },
       });
       setIsContextLoaded(true);
-      // FAKE INITIAL MESSAGE (For UI Only)
-      setMessages([{ role: 'model', content: "I have reviewed your resume. I am ready to begin. Please introduce yourself." }]);
+      setMessages([{ role: 'model', content: "Welcome to Prepped.ai. I have reviewed your profile. Let's begin." }]);
     } catch (error) {
       console.error(error);
-      alert("Failed to upload context. Check backend terminal for errors.");
+      alert("Backend connection failed.");
     } finally {
       setIsLoading(false);
     }
@@ -64,37 +64,47 @@ function App() {
     setInput('');
     setIsLoading(true);
 
-    // 1. Update UI (Show User Message)
     const newHistory = [...messages, { role: 'user', content: userMsg } as Message];
     setMessages(newHistory);
 
     try {
-      // 2. Filter History for Backend
-      // We MUST remove the first message if it is the fake AI greeting.
-      // Gemini will CRASH if history starts with 'model'.
+      // Filter out fake greeting
       const historyForBackend = newHistory.slice(0, -1).filter((msg, index) => {
-        const isFirstMessage = index === 0;
-        const isModel = msg.role === 'model';
-        // If it's the first message AND it's from the model, it's our fake greeting. SKIP IT.
-        if (isFirstMessage && isModel) return false;
+        if (index === 0 && msg.role === 'model') return false;
         return true;
       });
 
-      const payload = {
-        message: userMsg,
-        history: historyForBackend
-      };
-
+      const payload = { message: userMsg, history: historyForBackend };
       const response = await axios.post('http://localhost:8000/chat', payload);
-      
       const aiMsg = response.data.response;
       setMessages([...newHistory, { role: 'model', content: aiMsg }]);
-
     } catch (error) {
       console.error(error);
-      setMessages([...newHistory, { role: 'model', content: "⚠️ Error: Connection to Interviewer failed. Check backend console." }]);
+      setMessages([...newHistory, { role: 'model', content: "Error connecting to Prepped.ai interviewer." }]);
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  // --- NEW FEATURE: End Interview ---
+  const handleEndInterview = async () => {
+    if (!window.confirm("Are you sure you want to end the interview and get feedback?")) return;
+    
+    setIsLoading(true);
+    try {
+        // Filter history same as chat
+        const historyForBackend = messages.filter((msg, index) => {
+            if (index === 0 && msg.role === 'model') return false;
+            return true;
+        });
+
+        const response = await axios.post('http://localhost:8000/feedback', { history: historyForBackend });
+        setFeedback(response.data.feedback);
+    } catch (error) {
+        console.error(error);
+        alert("Failed to generate feedback.");
+    } finally {
+        setIsLoading(false);
     }
   };
 
@@ -108,10 +118,13 @@ function App() {
   return (
     <div className="app-container">
       <header>
-        <h1>Prepped.ai 🤖</h1>
+        {/* REBRAND CHANGE */}
+        <h1>Prepped.ai 🚀</h1>
+        <p>Your AI Technical Interview Coach</p>
       </header>
 
-      {!isContextLoaded ? (
+      {/* VIEW 1: SETUP */}
+      {!isContextLoaded && !feedback && (
         <div className="setup-card">
           <h2>1. Setup Interview</h2>
           <div className="input-group">
@@ -128,22 +141,24 @@ function App() {
             />
           </div>
           <button onClick={handleStartInterview} disabled={isLoading}>
-            {isLoading ? "Uploading..." : "Start Interview"}
+            {isLoading ? "Analyzing..." : "Start Interview"}
           </button>
         </div>
-      ) : (
+      )}
+
+      {/* VIEW 2: CHAT */}
+      {isContextLoaded && !feedback && (
         <div className="chat-interface">
           <div className="chat-window">
             {messages.map((msg, index) => (
               <div key={index} className={`message ${msg.role}`}>
-                <div className="bubble">
-                  {msg.content}
-                </div>
+                <div className="bubble">{msg.content}</div>
               </div>
             ))}
             {isLoading && <div className="message model"><div className="bubble typing">...</div></div>}
             <div ref={messagesEndRef} />
           </div>
+          
           <div className="input-area">
             <textarea 
               value={input}
@@ -153,6 +168,22 @@ function App() {
             />
             <button onClick={handleSendMessage} disabled={isLoading}>Send</button>
           </div>
+          
+          {/* NEW FEATURE BUTTON */}
+          <button className="end-btn" onClick={handleEndInterview} disabled={isLoading} style={{marginTop: '10px', background: '#dc3545'}}>
+             End Interview & Get Feedback
+          </button>
+        </div>
+      )}
+
+      {/* VIEW 3: FEEDBACK REPORT */}
+      {feedback && (
+        <div className="feedback-card">
+            <h2>Interview Feedback</h2>
+            <div className="feedback-content">
+                <pre>{feedback}</pre>
+            </div>
+            <button onClick={() => window.location.reload()}>Start New Interview</button>
         </div>
       )}
     </div>

@@ -9,19 +9,17 @@ import pypdf
 from dotenv import load_dotenv
 import google.generativeai as genai
 
-# 1. Load Environment Variables
 load_dotenv()
 GENAI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 if not GENAI_API_KEY:
-    print("⚠️  CRITICAL WARNING: GEMINI_API_KEY is missing from .env file!")
+    print("⚠️  CRITICAL WARNING: GEMINI_API_KEY is missing!")
 
-# 2. Configure Gemini
 genai.configure(api_key=GENAI_API_KEY)
 
-app = FastAPI(title="MockOS API")
+# --- REBRAND CHANGE: Title Updated ---
+app = FastAPI(title="Prepped.ai API")
 
-# 3. CORS - Allow Frontend connection
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -30,13 +28,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 4. Global State (Wipes on restart)
 INTERVIEW_STATE = {
     "system_context": None,
     "is_initialized": False
 }
 
-# 5. Data Models
 class Message(BaseModel):
     role: str
     content: str
@@ -45,41 +41,38 @@ class ChatRequest(BaseModel):
     message: str
     history: List[Message] = []
 
-# 6. Helper: PDF Extraction
+# --- NEW FEATURE: Feedback Request Model ---
+class FeedbackRequest(BaseModel):
+    history: List[Message]
+
 def extract_text_from_pdf_file(pdf_file: UploadFile) -> str:
     try:
         reader = pypdf.PdfReader(pdf_file.file)
         full_text = ""
         for page in reader.pages:
             text = page.extract_text()
-            if text:
-                full_text += text + "\n"
+            if text: full_text += text + "\n"
         return full_text.strip()
     except Exception as e:
         print(f"PDF Error: {str(e)}")
         raise HTTPException(status_code=500, detail="Failed to read PDF")
 
-# --- Endpoints ---
-
 @app.post("/submit-context")
 async def submit_context(file: UploadFile = File(...), job_description: str = Form(...)):
-    print(f"📥 Received Context: {file.filename}")
-    
+    print(f"📥 Received Context for Prepped.ai: {file.filename}")
     if file.content_type != "application/pdf":
         raise HTTPException(status_code=400, detail="File must be a PDF")
 
     try:
         resume_text = extract_text_from_pdf_file(file)
-        
+        # --- REBRAND CHANGE: Updated Persona Name in Prompt ---
         system_prompt = f"""
-        ROLE: You are a strict, professional Senior Technical Interviewer.
+        ROLE: You are the 'Prepped.ai' Senior Technical Interviewer.
         GOAL: Conduct a technical interview for the Job Description provided.
-        
         RULES:
         1. Ask ONE question at a time.
-        2. Do not reveal the answer immediately. Wait for the candidate to respond.
-        3. If the answer is wrong, probe deeper.
-        4. Be concise.
+        2. Wait for the candidate to respond.
+        3. Be professional but strict.
         
         --- JOB DESCRIPTION ---
         {job_description}
@@ -87,13 +80,9 @@ async def submit_context(file: UploadFile = File(...), job_description: str = Fo
         --- CANDIDATE RESUME ---
         {resume_text}
         """
-
         INTERVIEW_STATE["system_context"] = system_prompt
         INTERVIEW_STATE["is_initialized"] = True
-        
-        print("✅ Context Loaded Successfully")
-        return {"message": "Context loaded successfully"}
-        
+        return {"message": "Prepped.ai Context loaded."}
     except Exception as e:
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
@@ -101,36 +90,56 @@ async def submit_context(file: UploadFile = File(...), job_description: str = Fo
 @app.post("/chat")
 async def chat(request: ChatRequest):
     if not INTERVIEW_STATE["is_initialized"]:
-        raise HTTPException(status_code=400, detail="Context missing. Please upload Resume/JD first.")
-
+        raise HTTPException(status_code=400, detail="Context missing.")
     try:
-        # Initialize Model
         model = genai.GenerativeModel(
-            model_name="gemini-2.5-flash",
+            model_name="gemini-2.5-flash", # Keeping your working model
             system_instruction=INTERVIEW_STATE["system_context"]
         )
-
-        # Convert History for Gemini
-        # Gemini expects: [{'role': 'user', 'parts': ['msg']}, {'role': 'model', 'parts': ['msg']}]
         gemini_history = []
         for msg in request.history:
             role_map = "user" if msg.role == "user" else "model"
             gemini_history.append({"role": role_map, "parts": [msg.content]})
 
-        # Start Chat
         chat_session = model.start_chat(history=gemini_history)
-        
-        # Send Message
         response = chat_session.send_message(request.message)
-        
         return {"response": response.text}
-
     except Exception as e:
-        # --- DEBUG LOGGING ---
-        print("\n❌ CRITICAL ERROR IN /chat ENDPOINT:")
-        traceback.print_exc() # This prints the specific line number and error to terminal
-        # ---------------------
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"AI Error: {str(e)}")
+
+# --- NEW FEATURE: Feedback Endpoint ---
+@app.post("/feedback")
+async def get_feedback(request: FeedbackRequest):
+    """
+    Analyzes the chat history and provides scores and feedback.
+    """
+    try:
+        # We create a new "Feedback" prompt using the chat history
+        conversation_text = ""
+        for msg in request.history:
+            conversation_text += f"{msg.role.upper()}: {msg.content}\n"
+
+        feedback_prompt = f"""
+        Analyze the following technical interview conversation.
+        Provide constructive feedback to the candidate.
+        
+        Output format:
+        1. Score (0-10)
+        2. Strong Points (Bullet points)
+        3. Areas for Improvement (Bullet points)
+        4. Final Verdict (Hire / No Hire)
+
+        --- CONVERSATION ---
+        {conversation_text}
+        """
+
+        model = genai.GenerativeModel("gemini-2.5-flash")
+        response = model.generate_content(feedback_prompt)
+        return {"feedback": response.text}
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Feedback Error: {str(e)}")
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)
