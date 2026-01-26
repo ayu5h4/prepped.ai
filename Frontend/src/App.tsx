@@ -13,6 +13,12 @@ type Theme = 'light' | 'dark' | 'system';
 type DrawTool = 'pen' | 'eraser' | 'rectangle' | 'circle' | 'text';
 
 function App() {
+  // Inside your App component
+  const [pendingText, setPendingText] = useState('');
+  const [textPos, setTextPos] = useState({ x: 0, y: 0 });
+  const [isTyping, setIsTyping] = useState(false);
+
+
   const [activeTab, setActiveTab] = useState<'chat' | 'code' | 'notes'>('chat');
   const [theme, setTheme] = useState<Theme>('system');
   const [codeTheme, setCodeTheme] = useState<'dark' | 'light'>('dark');
@@ -151,6 +157,47 @@ function App() {
         .catch(err => console.error("Webcam access denied:", err));
     }
   }, []);
+  useEffect(() => {
+  if (!isTyping) return;
+
+  const handleKeyDown = (e: KeyboardEvent) => {
+    if (e.key === 'Enter') {
+      setIsTyping(false);
+      saveCanvasState(); // Commit the text
+    } else if (e.key === 'Escape') {
+      setIsTyping(false);
+      undoCanvas(); // Cancel typing
+      } else if (e.key === 'Backspace') {
+        setPendingText(prev => prev.slice(0, -1));
+      } else if (e.key.length === 1) {
+        setPendingText(prev => prev + e.key);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isTyping]);
+  // Inside your component, use a useEffect to redraw when pendingText changes
+useEffect(() => {
+  if (!isTyping || !canvasRef.current) return;
+  
+  const canvas = canvasRef.current;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return;
+
+  // Restore the canvas from the last snapshot before drawing the preview
+  const img = new Image();
+  img.onload = () => {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(img, 0, 0);
+    
+    // Draw the Preview Text
+    ctx.font = `${strokeWidth * 8}px Inter`;
+    ctx.fillStyle = drawColor;
+    ctx.fillText(pendingText + (isTyping ? '|' : ''), textPos.x, textPos.y);
+  };
+  img.src = canvasHistory[historyStep];
+}, [pendingText, isTyping]);
 
   // --- Voice Recording Setup ---
   const startVoiceRecording = async () => {
@@ -284,43 +331,27 @@ function App() {
     }
   };
 
-  const stopDrawing = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    if (!isDrawing) return;
-    const canvas = canvasRef.current;
-    const ctx = canvas?.getContext('2d');
-    if (!ctx || !canvas) return;
+const stopDrawing = (e: React.MouseEvent<HTMLCanvasElement>) => {
+  if (!isDrawing) return;
+  const canvas = canvasRef.current;
+  const ctx = canvas?.getContext('2d');
+  if (!ctx || !canvas) return;
 
     const rect = canvas.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
 
-    if (drawTool === 'rectangle' || drawTool === 'circle') {
-      if (snapshotRef.current) {
-        ctx.putImageData(snapshotRef.current, 0, 0);
-      }
+  if (drawTool === 'text') {
+    setTextPos({ x: startPos.x, y: startPos.y });
+    setIsTyping(true);
+    setPendingText(''); // Clear previous text
+  } else if (drawTool === 'rectangle' || drawTool === 'circle') {
+    // ... existing shape logic ...
+  }
 
-      ctx.beginPath();
-      if (drawTool === 'rectangle') {
-        const width = x - startPos.x;
-        const height = y - startPos.y;
-        ctx.rect(startPos.x, startPos.y, width, height);
-      } else if (drawTool === 'circle') {
-        const radius = Math.sqrt(Math.pow(x - startPos.x, 2) + Math.pow(y - startPos.y, 2));
-        ctx.arc(startPos.x, startPos.y, radius, 0, 2 * Math.PI);
-      }
-      ctx.stroke();
-      snapshotRef.current = null;
-    } else if (drawTool === 'text') {
-      const text = prompt('Enter text:');
-      if (text) {
-        ctx.font = `${strokeWidth * 8}px Inter`;
-        ctx.fillText(text, startPos.x, startPos.y);
-      }
-    }
-
-    setIsDrawing(false);
-    saveCanvasState();
-  };
+  setIsDrawing(false);
+  saveCanvasState();
+};
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files) setFile(e.target.files[0]);
@@ -475,30 +506,70 @@ function App() {
       <main className="workspace">
         <div className="main-panel">
           <div className="tabs-header">
-            <div className={`tab ${activeTab === 'chat' ? 'active' : ''}`} onClick={() => setActiveTab('chat')}>
+            <div 
+              className={`tab ${activeTab === 'chat' ? 'active' : ''}`} 
+                onClick={() => setActiveTab('chat')}
+                >
               <MessageSquare size={16} /> Chat
-            </div>
-            <div className={`tab ${activeTab === 'code' ? 'active' : ''}`} onClick={() => setActiveTab('code')}>
-              <Code size={16} /> Code
-            </div>
-            <div className={`tab ${activeTab === 'notes' ? 'active' : ''}`} onClick={() => setActiveTab('notes')}>
-              <StickyNote size={16} /> Notes
-            </div>
-          </div>
+              </div>
+            <div 
+              className={`tab ${activeTab === 'code' ? 'active' : ''}`} 
+                onClick={() => setActiveTab('code')}
+            >
+    <Code size={16} /> Code
+  </div>
+  <div 
+    className={`tab ${activeTab === 'notes' ? 'active' : ''}`} 
+    onClick={() => setActiveTab('notes')}
+  >
+    <StickyNote size={16} /> Notes
+  </div>
+</div>
 
           <div className="panel-content">
+
             {!isContextLoaded ? (
-              <div style={{padding: '40px', textAlign: 'center'}}>
-                <h2>Setup Interview Context</h2>
-                <div style={{maxWidth: '400px', margin: '20px auto', display: 'flex', flexDirection: 'column', gap: '15px'}}>
-                   <input type="file" accept=".pdf" onChange={handleFileChange} />
-                   <textarea rows={4} placeholder="Paste JD..." value={jd} onChange={e => setJd(e.target.value)} style={{padding: '10px'}}/>
-                   <button onClick={handleStartInterview} style={{padding: '10px', background: 'var(--accent-color)', color: 'var(--accent-text)', border: 'none', borderRadius: '6px', cursor: 'pointer'}}>
-                     {isLoading ? "Loading..." : "Start Session"}
-                   </button>
-                </div>
-              </div>
+  <div className="setup-container">
+    <div className="setup-card">
+      <h2>Setup Interview Context</h2>
+      <div className="setup-form">
+        <div className="file-input-wrapper">
+          <label htmlFor="resume-upload" className="glass-button secondary">
+            <Download size={16} /> {file ? file.name : "Upload Resume (PDF)"}
+          </label>
+          <input 
+            id="resume-upload" 
+            type="file" 
+            accept=".pdf" 
+            onChange={handleFileChange} 
+            style={{ display: 'none' }} 
+          />
+        </div>
+        
+        <textarea 
+          rows={4} 
+          placeholder="Paste Job Description..." 
+          value={jd} 
+          onChange={e => setJd(e.target.value)} 
+          className="glass-textarea"
+        />
+        
+        <button 
+          onClick={handleStartInterview} 
+          className="glass-button primary"
+          disabled={isLoading}
+        >
+          {isLoading ? (
+            <div className="loader"></div>
+          ) : (
+            <>Ready to Start <Play size={16} /></>
+          )}
+        </button>
+      </div>
+    </div>
+  </div>
             ) : (
+// ...
               <>
                 {activeTab === 'chat' && (
                   <div className="chat-container">
