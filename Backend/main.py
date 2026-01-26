@@ -3,6 +3,9 @@ import uvicorn
 import traceback
 import base64
 import io
+import sys
+import subprocess
+import tempfile
 from typing import List, Optional
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -49,6 +52,10 @@ class ChatRequest(BaseModel):
 class FeedbackRequest(BaseModel):
     history: List[Message]
 
+class CodeExecutionRequest(BaseModel):
+    code: str
+    language: str  # 'python' or 'javascript'
+
 # --- Helper: PDF Extraction ---
 def extract_text_from_pdf_file(pdf_file: UploadFile) -> str:
     try:
@@ -89,6 +96,32 @@ async def text_to_speech_base64(text: str) -> str:
         return None
 
 # --- Endpoints ---
+
+@app.get("/")
+async def root():
+    """Root endpoint to verify server is running"""
+    return {
+        "status": "online",
+        "service": "Prepped.ai API",
+        "version": "1.0.0",
+        "endpoints": {
+            "docs": "/docs",
+            "health": "/health",
+            "submit_context": "/submit-context",
+            "chat": "/chat",
+            "execute_code": "/execute-code",
+            "feedback": "/feedback"
+        }
+    }
+
+@app.get("/health")
+async def health_check():
+    """Health check endpoint"""
+    return {
+        "status": "healthy",
+        "endpoints": ["/submit-context", "/chat", "/feedback", "/execute-code"],
+        "version": "1.0.0"
+    }
 
 @app.post("/submit-context")
 async def submit_context(file: UploadFile = File(...), job_description: str = Form(...)):
@@ -155,6 +188,156 @@ async def chat(request: ChatRequest):
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"AI Error: {str(e)}")
 
+@app.post("/execute-code")
+async def execute_code(request: CodeExecutionRequest):
+    """
+    Executes Python or JavaScript code in a sandboxed environment.
+    Returns output or error messages.
+    """
+    print(f"\n{'='*50}")
+    print(f"📝 Code Execution Request Received")
+    print(f"Language: {request.language}")
+    print(f"Code length: {len(request.code)} characters")
+    print(f"{'='*50}\n")
+    
+    try:
+        if request.language == "python":
+            result = await execute_python_code(request.code)
+            print(f"✅ Python execution completed: Success={result['success']}")
+            return result
+        elif request.language == "javascript":
+            result = await execute_javascript_code(request.code)
+            print(f"✅ JavaScript execution completed: Success={result['success']}")
+            return result
+        else:
+            print(f"❌ Unsupported language: {request.language}")
+            raise HTTPException(status_code=400, detail=f"Unsupported language: {request.language}. Use 'python' or 'javascript'")
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"❌ Execution error: {str(e)}")
+        traceback.print_exc()
+        return {
+            "success": False,
+            "output": "",
+            "error": f"Server error: {str(e)}"
+        }
+
+async def execute_python_code(code: str) -> dict:
+    """
+    Execute Python code safely and return output/errors.
+    """
+    try:
+        # Create temporary file for code
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
+            f.write(code)
+            temp_file = f.name
+        
+        try:
+            # Execute with timeout (5 seconds)
+            result = subprocess.run(
+                [sys.executable, temp_file],
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+            
+            # Clean up
+            os.unlink(temp_file)
+            
+            if result.returncode == 0:
+                return {
+                    "success": True,
+                    "output": result.stdout or "Code executed successfully (no output)",
+                    "error": result.stderr if result.stderr else None
+                }
+            else:
+                return {
+                    "success": False,
+                    "output": result.stdout,
+                    "error": result.stderr or "Execution failed"
+                }
+        except subprocess.TimeoutExpired:
+            os.unlink(temp_file)
+            return {
+                "success": False,
+                "output": "",
+                "error": "Execution timeout (max 5 seconds)"
+            }
+        except Exception as e:
+            if os.path.exists(temp_file):
+                os.unlink(temp_file)
+            raise e
+            
+    except Exception as e:
+        return {
+            "success": False,
+            "output": "",
+            "error": f"Execution error: {str(e)}"
+        }
+
+async def execute_javascript_code(code: str) -> dict:
+    """
+    Execute JavaScript code using Node.js and return output/errors.
+    """
+    try:
+        # Check if Node.js is installed
+        node_check = subprocess.run(['node', '--version'], capture_output=True)
+        if node_check.returncode != 0:
+            return {
+                "success": False,
+                "output": "",
+                "error": "Node.js is not installed. Please install Node.js to run JavaScript code."
+            }
+        
+        # Create temporary file for code
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.js', delete=False) as f:
+            f.write(code)
+            temp_file = f.name
+        
+        try:
+            # Execute with timeout (5 seconds)
+            result = subprocess.run(
+                ['node', temp_file],
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+            
+            # Clean up
+            os.unlink(temp_file)
+            
+            if result.returncode == 0:
+                return {
+                    "success": True,
+                    "output": result.stdout or "Code executed successfully (no output)",
+                    "error": result.stderr if result.stderr else None
+                }
+            else:
+                return {
+                    "success": False,
+                    "output": result.stdout,
+                    "error": result.stderr or "Execution failed"
+                }
+        except subprocess.TimeoutExpired:
+            os.unlink(temp_file)
+            return {
+                "success": False,
+                "output": "",
+                "error": "Execution timeout (max 5 seconds)"
+            }
+        except Exception as e:
+            if os.path.exists(temp_file):
+                os.unlink(temp_file)
+            raise e
+            
+    except Exception as e:
+        return {
+            "success": False,
+            "output": "",
+            "error": f"Execution error: {str(e)}"
+        }
+
 @app.post("/feedback")
 async def get_feedback(request: FeedbackRequest):
     try:
@@ -181,4 +364,21 @@ async def get_feedback(request: FeedbackRequest):
         raise HTTPException(status_code=500, detail=f"Feedback Error: {str(e)}")
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    print("\n" + "="*60)
+    print("🚀 Starting Prepped.ai Backend Server")
+    print("="*60)
+    print(f"📡 Server URL: http://localhost:8000")
+    print(f"📚 API Documentation: http://localhost:8000/docs")
+    print(f"🔍 Health Check: http://localhost:8000/health")
+    print(f"🏠 Root Endpoint: http://localhost:8000/")
+    print("="*60)
+    print("\n✅ Available Endpoints:")
+    print("   POST /submit-context")
+    print("   POST /chat")
+    print("   POST /execute-code  ← CODE EXECUTION")
+    print("   POST /feedback")
+    print("   GET  /health")
+    print("   GET  /")
+    print("="*60 + "\n")
+    
+    uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")
