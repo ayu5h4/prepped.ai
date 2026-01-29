@@ -4,3 +4,5 @@ python-multipart
 pypdf
 google-generativeai
 python-dotenv
+axios
+edge-tts
