@@ -43,7 +43,7 @@ body {
   margin: 0;
   font-family: var(--font-sans);
   height: 100vh;
-  overflow: hidden;
+  overflow: auto;
   color: var(--text-primary);
   /* Static Background: Removed animation and simplified gradients */
   background: 
